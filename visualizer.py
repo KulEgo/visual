@@ -1,12 +1,11 @@
 """
-viz3d — главный модуль.
+viz3d — главный модуль (тема Nordic).
  
 Веб-интерфейс с двумя режимами:
-  • 2D: y = f(x) — обычная кривая на плоскости
+  • 2D: y = f(x) — кривая на плоскости
   • 3D: z = f(x, y) или параметрическая поверхность (x, y, z) = f(u, v)
  
-Снизу под графиком выводится автоматически определённый тип функции
-(линейная, парабола, синусоида, параболоид, седло, сфера, тор и т. д.).
+Под графиком — автоматически определённый тип функции.
 """
  
 import ast
@@ -46,7 +45,6 @@ _ALLOWED_NODES = (
  
  
 def _safe_compile(expr: str, allowed_vars: set):
-    """Безопасно компилирует выражение. allowed_vars — какие имена-переменные разрешены."""
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError as e:
@@ -69,7 +67,6 @@ def _safe_compile(expr: str, allowed_vars: set):
  
  
 def _evaluate(expr: str, var_names: tuple, var_values: tuple):
-    """Безопасно вычисляет выражение."""
     allowed_vars = set(var_names)
     _, code = _safe_compile(expr, allowed_vars)
     namespace = dict(_SAFE_NAMES)
@@ -80,17 +77,15 @@ def _evaluate(expr: str, var_names: tuple, var_values: tuple):
  
  
 def _has_any_valid_point(arrays):
-    """True если есть точка, где ВСЕ массивы конечны одновременно."""
     mask = np.ones(arrays[0].shape, dtype=bool)
     for arr in arrays:
         mask &= np.isfinite(arr)
     return bool(np.any(mask))
  
  
-# === Распознавание типа функции (символический анализ AST) ===
+# === Распознавание типа функции ===
  
 def _used_functions(tree: ast.AST) -> set:
-    """Множество имён функций, использованных в выражении (sin, cos, log, ...)."""
     funcs = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -98,11 +93,22 @@ def _used_functions(tree: ast.AST) -> set:
     return funcs
  
  
+def _const_value(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    if isinstance(node, ast.UnaryOp):
+        v = _const_value(node.operand)
+        if v is None:
+            return None
+        if isinstance(node.op, ast.USub):
+            return -v
+        if isinstance(node.op, ast.UAdd):
+            return v
+    return None
+ 
+ 
 def _total_polynomial_degree(tree: ast.AST, variables: tuple) -> Optional[int]:
-    """
-    Полная степень многочлена от заданных переменных (по сумме показателей в мономе).
-    None — если не многочлен. Например: x*y → 2, x**2 + y → 2, x + y → 1.
-    """
+    """Полная степень многочлена от заданных переменных."""
     def deg(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
             return 0
@@ -142,30 +148,20 @@ def _total_polynomial_degree(tree: ast.AST, variables: tuple) -> Optional[int]:
  
  
 def _polynomial_degree(tree: ast.AST, var: str) -> Optional[int]:
-    """
-    Если выражение — многочлен от переменной var, возвращает его степень.
-    Если не многочлен — None. Степень 0 = константа (от var не зависит).
-    """
+    """Степень многочлена по одной переменной."""
     def deg(node):
-        # Число / константа → степень 0
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
             return 0
-        # Имя переменной
         if isinstance(node, ast.Name):
             if node.id == var:
                 return 1
-            # Любое другое известное имя (другая переменная или константа pi/e/tau)
-            # относительно var является константой → степень 0
             if node.id in _SAFE_NAMES or node.id in {"x", "y", "u", "v"}:
                 return 0
             return None
-        # Унарные + и - не меняют степень
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
             return deg(node.operand)
-        # Бинарные операции
         if isinstance(node, ast.BinOp):
-            l = deg(node.left)
-            r = deg(node.right)
+            l, r = deg(node.left), deg(node.right)
             if l is None or r is None:
                 return None
             if isinstance(node.op, (ast.Add, ast.Sub)):
@@ -173,21 +169,17 @@ def _polynomial_degree(tree: ast.AST, var: str) -> Optional[int]:
             if isinstance(node.op, ast.Mult):
                 return l + r
             if isinstance(node.op, ast.Div):
-                # Деление полиномиально только если знаменатель — константа
                 if r == 0:
                     return l
                 return None
             if isinstance(node.op, ast.Pow):
-                # Степень полиномиальна, если показатель — целая неотрицательная константа
                 if r != 0:
                     return None
-                # Извлекаем числовое значение показателя
                 exp_val = _const_value(node.right)
                 if exp_val is None or exp_val < 0 or exp_val != int(exp_val):
                     return None
                 return l * int(exp_val)
             return None
-        # Вызовы функций — точно не полином
         if isinstance(node, ast.Call):
             return None
         return None
@@ -195,23 +187,7 @@ def _polynomial_degree(tree: ast.AST, var: str) -> Optional[int]:
     return deg(tree.body if isinstance(tree, ast.Expression) else tree)
  
  
-def _const_value(node):
-    """Пробует извлечь числовое значение из узла-константы (включая -число)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return float(node.value)
-    if isinstance(node, ast.UnaryOp):
-        v = _const_value(node.operand)
-        if v is None:
-            return None
-        if isinstance(node.op, ast.USub):
-            return -v
-        if isinstance(node.op, ast.UAdd):
-            return v
-    return None
- 
- 
 def _classify_2d(expr: str) -> str:
-    """Определяет тип функции y = f(x) и возвращает описание."""
     try:
         tree, _ = _safe_compile(expr, {"x"})
     except ValueError:
@@ -220,7 +196,6 @@ def _classify_2d(expr: str) -> str:
     funcs = _used_functions(tree)
     degree = _polynomial_degree(tree, "x")
  
-    # Если многочлен — называем по степени
     if degree is not None:
         names = {
             0: "Постоянная функция (горизонтальная прямая)",
@@ -233,7 +208,6 @@ def _classify_2d(expr: str) -> str:
             return names[degree]
         return f"Многочлен {degree}-й степени"
  
-    # Не многочлен — определяем по использованным функциям
     trig = funcs & {"sin", "cos", "tan", "asin", "acos", "atan",
                     "sinh", "cosh", "tanh"}
     if trig:
@@ -251,7 +225,6 @@ def _classify_2d(expr: str) -> str:
  
  
 def _classify_3d_surface(expr: str) -> str:
-    """Определяет тип поверхности z = f(x, y)."""
     try:
         tree, _ = _safe_compile(expr, {"x", "y"})
     except ValueError:
@@ -260,7 +233,6 @@ def _classify_3d_surface(expr: str) -> str:
     funcs = _used_functions(tree)
     total_deg = _total_polynomial_degree(tree, ("x", "y"))
  
-    # Многочлен от x и y
     if total_deg is not None:
         if total_deg == 0:
             return "Горизонтальная плоскость"
@@ -273,7 +245,6 @@ def _classify_3d_surface(expr: str) -> str:
             return "Квадратичная поверхность 2-й степени"
         return f"Поверхность {total_deg}-й степени"
  
-    # Тригонометрия
     trig = funcs & {"sin", "cos", "tan", "asin", "acos", "atan",
                     "sinh", "cosh", "tanh"}
     if trig:
@@ -289,12 +260,6 @@ def _classify_3d_surface(expr: str) -> str:
  
  
 def _classify_quadratic_surface(tree: ast.AST) -> Optional[str]:
-    """
-    Численная проверка по тестовым точкам: что за квадратичная поверхность.
-    Параболоид: f(x,y) = a·x² + b·y² + ... с одинаковыми знаками при x², y²
-    Седло: разные знаки при x², y²
-    Параболический цилиндр: один из коэффициентов = 0
-    """
     code = compile(tree, "<expr>", "eval")
  
     def f(x, y):
@@ -307,13 +272,11 @@ def _classify_quadratic_surface(tree: ast.AST) -> Optional[str]:
         except Exception:
             return float("nan")
  
-    # Коэффициенты при x², y², xy через конечные разности второго порядка
-    # ∂²/∂x² ≈ f(h,0) - 2f(0,0) + f(-h,0)  → 2·a
     h = 0.01
     f00 = f(0, 0)
-    a2 = (f(h, 0) - 2 * f00 + f(-h, 0)) / (h * h)   # 2·коэф при x²
-    b2 = (f(0, h) - 2 * f00 + f(0, -h)) / (h * h)   # 2·коэф при y²
-    xy = (f(h, h) - f(h, -h) - f(-h, h) + f(-h, -h)) / (4 * h * h)  # коэф при xy
+    a2 = (f(h, 0) - 2 * f00 + f(-h, 0)) / (h * h)
+    b2 = (f(0, h) - 2 * f00 + f(0, -h)) / (h * h)
+    xy = (f(h, h) - f(h, -h) - f(-h, h) + f(-h, -h)) / (4 * h * h)
  
     def near_zero(v):
         return abs(v) < 1e-6
@@ -324,15 +287,13 @@ def _classify_quadratic_surface(tree: ast.AST) -> Optional[str]:
     a_zero, b_zero, xy_zero = near_zero(a2), near_zero(b2), near_zero(xy)
  
     if a_zero and b_zero and xy_zero:
-        return None  # не квадратичная по факту
+        return None
     if xy_zero:
         if a_zero or b_zero:
             return "Параболический цилиндр"
         if (a2 > 0) == (b2 > 0):
             return "Эллиптический параболоид"
         return "Гиперболический параболоид (седло)"
-    # есть смешанный член
-    # Детерминант квадратичной формы a·x² + 2c·xy + b·y² → ab - c²
     det = (a2 / 2) * (b2 / 2) - (xy / 2) ** 2
     if det > 0:
         return "Эллиптический параболоид"
@@ -342,21 +303,17 @@ def _classify_quadratic_surface(tree: ast.AST) -> Optional[str]:
  
  
 def _classify_3d_parametric(parts: list) -> str:
-    """Распознаёт стандартные параметрические поверхности."""
     if len(parts) != 3:
         return "Параметрическая поверхность"
  
-    # Нормализуем — убираем пробелы
     norm = [p.replace(" ", "") for p in parts]
  
-    # Сфера: (cos(u)*sin(v), sin(u)*sin(v), cos(v)) с возможными радиусами
     if (all("sin" in p or "cos" in p for p in norm)
             and "cos(u)" in norm[0] and "sin(v)" in norm[0]
             and "sin(u)" in norm[1] and "sin(v)" in norm[1]
             and "cos(v)" in norm[2]):
         return "Сфера"
  
-    # Тор: первые две координаты — (R + r·cos(v))·cos(u) и ·sin(u), третья — sin(v)
     has_torus_pattern = (
         ("cos(v)" in norm[0] and "cos(u)" in norm[0])
         and ("cos(v)" in norm[1] and "sin(u)" in norm[1])
@@ -365,17 +322,14 @@ def _classify_3d_parametric(parts: list) -> str:
     if has_torus_pattern:
         return "Тор"
  
-    # Цилиндр: x = r·cos(u), y = r·sin(u), z = v (или линейная по v)
     if ("cos(u)" in norm[0] and "sin(u)" in norm[1]
             and "u" not in norm[2] and "sin" not in norm[2] and "cos" not in norm[2]):
         return "Цилиндр"
  
-    # Геликоид: u·cos(v), u·sin(v), v
     if ("cos(v)" in norm[0] and "sin(v)" in norm[1]
             and norm[2] in ("v", "-v")):
         return "Геликоид"
  
-    # Конус: u·cos(v), u·sin(v), u
     if ("cos" in norm[0] and "sin" in norm[1]
             and norm[2] in ("u", "v", "-u", "-v")):
         return "Конус"
@@ -383,10 +337,9 @@ def _classify_3d_parametric(parts: list) -> str:
     return "Параметрическая поверхность"
  
  
-# === Подготовка данных ===
+# === Подготовка данных для Plotly ===
  
 def _compute_2d(expr: str, x_min, x_max, resolution):
-    """y = f(x) на отрезке [x_min, x_max]."""
     x = np.linspace(x_min, x_max, resolution)
     y = _evaluate(expr, ("x",), (x,))
     y = np.broadcast_to(np.asarray(y, dtype=float), x.shape).astype(float).copy()
@@ -403,14 +356,13 @@ def _compute_2d(expr: str, x_min, x_max, resolution):
             "mode": "lines",
             "x": x.tolist(),
             "y": [None if math.isnan(v) else v for v in y],
-            "line": {"color": "#4a90e2", "width": 3},
+            "line": {"color": "#88c0d0", "width": 2.5},
         }],
         "description": _classify_2d(expr),
     }
  
  
 def _compute_3d(expr: str, x_min, x_max, y_min, y_max, resolution):
-    """3D-режим: либо z = f(x, y), либо параметрика."""
     parts = [p.strip() for p in expr.split(";") if p.strip()]
  
     if len(parts) == 1:
@@ -431,7 +383,16 @@ def _compute_3d(expr: str, x_min, x_max, y_min, y_max, resolution):
                 "type": "surface",
                 "x": X.tolist(), "y": Y.tolist(),
                 "z": [[None if math.isnan(v) else v for v in row] for row in Z],
-                "colorscale": "Viridis", "showscale": True,
+                # Одноцветная поверхность Nord frost — задаём через одинаковые
+                # стопы в colorscale, чтобы убрать градиент
+                "colorscale": [[0, "#88c0d0"], [1, "#88c0d0"]],
+                "opacity": 0.55,
+                "showscale": False,
+                "lighting": {
+                    "ambient": 0.7, "diffuse": 0.6,
+                    "specular": 0.1, "roughness": 0.9,
+                },
+                "contours": {"z": {"show": False}},
             }],
             "description": _classify_3d_surface(parts[0]),
         }
@@ -458,7 +419,13 @@ def _compute_3d(expr: str, x_min, x_max, y_min, y_max, resolution):
                 "x": [[None if math.isnan(v) else v for v in row] for row in X],
                 "y": [[None if math.isnan(v) else v for v in row] for row in Y],
                 "z": [[None if math.isnan(v) else v for v in row] for row in Z],
-                "colorscale": "Plasma", "showscale": True,
+                "colorscale": [[0, "#88c0d0"], [1, "#88c0d0"]],
+                "opacity": 0.55,
+                "showscale": False,
+                "lighting": {
+                    "ambient": 0.7, "diffuse": 0.6,
+                    "specular": 0.1, "roughness": 0.9,
+                },
             }],
             "description": _classify_3d_parametric(parts),
         }
@@ -469,137 +436,149 @@ def _compute_3d(expr: str, x_min, x_max, y_min, y_max, resolution):
     )
  
  
-# === HTML ===
+# === HTML с темой Nordic ===
  
 _HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>viz3d — визуализация</title>
+    <title>viz3d</title>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
+        /* === Nordic палитра === */
+        :root {
+            --bg:        #2e3440;   /* polar night 0 */
+            --bg-2:      #3b4252;   /* polar night 1 */
+            --bg-3:      #434c5e;   /* polar night 2 */
+            --border:    #4c566a;   /* polar night 3 */
+            --text:      #eceff4;   /* snow 2 */
+            --text-mute: #d8dee9;   /* snow 0 */
+            --text-dim:  #81a1c1;   /* frost 2 */
+            --accent:    #88c0d0;   /* frost 1 */
+            --accent-2:  #5e81ac;   /* frost 3 */
+            --danger-bg: #4c2a30;
+            --danger-fg: #bf616a;   /* aurora red */
+        }
         * { box-sizing: border-box; }
         body {
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #0f1419; color: #e6e6e6;
+            background: var(--bg); color: var(--text);
             display: flex; flex-direction: column;
             height: 100vh; overflow: hidden;
         }
         .header {
             padding: 14px 20px;
-            background: #1a1f2e;
-            border-bottom: 1px solid #2a3142;
+            background: var(--bg-2);
+            border-bottom: 1px solid var(--border);
             display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
         }
         .title {
-            font-size: 16px; font-weight: 600; margin: 0;
-            margin-right: 4px; color: #e6e6e6; white-space: nowrap;
-            padding-bottom: 8px;
+            font-size: 16px; font-weight: 500; margin: 0;
+            margin-right: 4px; color: var(--text); white-space: nowrap;
+            padding-bottom: 8px; letter-spacing: 0.3px;
         }
-        /* Переключатель 2D / 3D */
         .mode-switch {
             display: flex;
-            background: #0f1419;
-            border: 1px solid #2a3142;
+            background: var(--bg);
+            border: 1px solid var(--border);
             border-radius: 6px;
             overflow: hidden;
             align-self: flex-end;
         }
         .mode-switch button {
             background: transparent; border: none;
-            color: #8b95a7; padding: 8px 16px;
-            font-size: 13px; font-weight: 600; cursor: pointer;
+            color: var(--text-dim); padding: 8px 16px;
+            font-size: 13px; font-weight: 500; cursor: pointer;
             transition: background 0.15s, color 0.15s;
         }
+        .mode-switch button:hover { color: var(--text); }
         .mode-switch button.active {
-            background: #4a90e2; color: white;
+            background: var(--accent); color: var(--bg);
         }
         .field { display: flex; flex-direction: column; gap: 3px; }
         .field label {
-            font-size: 11px; color: #8b95a7;
-            text-transform: uppercase; letter-spacing: 0.5px;
+            font-size: 11px; color: var(--text-dim);
+            text-transform: uppercase; letter-spacing: 0.6px;
+            font-weight: 500;
         }
         input[type="text"], input[type="number"] {
-            background: #0f1419; border: 1px solid #2a3142;
-            color: #e6e6e6; padding: 7px 10px; border-radius: 5px;
+            background: var(--bg); border: 1px solid var(--border);
+            color: var(--text); padding: 7px 10px; border-radius: 5px;
             font-family: "SF Mono", Monaco, Consolas, monospace;
             font-size: 13px; outline: none;
             transition: border-color 0.15s;
         }
-        input[type="text"]:focus, input[type="number"]:focus { border-color: #4a90e2; }
+        input[type="text"]::placeholder { color: var(--text-dim); opacity: 0.6; }
+        input[type="text"]:focus, input[type="number"]:focus { border-color: var(--accent); }
         input.expr { min-width: 280px; flex-grow: 1; }
         input.range-input { width: 65px; }
         .range-group { display: flex; align-items: center; gap: 4px; }
-        .range-group span { color: #5a6478; font-size: 12px; }
+        .range-group span { color: var(--text-dim); font-size: 12px; }
         button.action {
-            background: #4a90e2; color: white; border: none;
+            background: var(--accent); color: var(--bg); border: none;
             padding: 9px 18px; border-radius: 5px;
             font-size: 13px; font-weight: 500; cursor: pointer;
             transition: background 0.15s;
         }
-        button.action:hover { background: #5aa0f2; }
-        button.action:disabled { background: #3a4356; cursor: not-allowed; }
+        button.action:hover { background: var(--text-mute); }
+        button.action:disabled { background: var(--bg-3); color: var(--text-dim); cursor: not-allowed; }
         .examples {
-            padding: 8px 20px; background: #151a26;
-            border-bottom: 1px solid #2a3142;
-            font-size: 12px; color: #8b95a7;
+            padding: 8px 20px; background: var(--bg);
+            border-bottom: 1px solid var(--border);
+            font-size: 12px; color: var(--text-dim);
             display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
             min-height: 38px;
         }
-        .examples span.label { color: #5a6478; }
+        .examples span.label { color: var(--text-dim); opacity: 0.7; }
         .chip {
-            background: #1a1f2e; padding: 4px 10px; border-radius: 12px;
+            background: var(--bg-2); padding: 4px 10px; border-radius: 12px;
             cursor: pointer;
             font-family: "SF Mono", Monaco, Consolas, monospace;
-            transition: background 0.15s, color 0.15s;
-            border: 1px solid #2a3142;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            border: 1px solid var(--border);
+            color: var(--text-mute);
         }
-        .chip:hover { background: #2a3142; color: #e6e6e6; }
+        .chip:hover { background: var(--bg-3); color: var(--text); border-color: var(--accent-2); }
         .plot-wrap { flex-grow: 1; min-height: 0; position: relative; }
         #plot { width: 100%; height: 100%; }
         .error {
-            background: #4a1d1d; color: #ff8888;
-            padding: 10px 20px; border-bottom: 1px solid #6a2d2d;
+            background: var(--danger-bg); color: var(--danger-fg);
+            padding: 10px 20px; border-bottom: 1px solid var(--border);
             font-family: "SF Mono", Monaco, Consolas, monospace;
             font-size: 13px; display: none;
         }
         .error.visible { display: block; }
-        /* Плашка описания внизу графика (тип функции) */
         .description {
-            background: #1a1f2e;
-            border-top: 1px solid #2a3142;
+            background: var(--bg-2);
+            border-top: 1px solid var(--border);
             padding: 12px 20px;
             font-size: 14px;
-            color: #e6e6e6;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            color: var(--text);
+            display: none;
+            align-items: center; gap: 10px;
         }
         .description .badge {
-            background: #4a90e2;
-            color: white;
+            background: var(--accent);
+            color: var(--bg);
             padding: 3px 10px;
             border-radius: 10px;
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.6px;
         }
-        /* Скрываем 3D-поля в 2D-режиме */
         body.mode-2d .only-3d { display: none; }
-        body.mode-2d .label-x { content: "Диапазон x"; }
-        /* Плашка «такого графика не существует» */
         .no-graph {
             position: absolute;
             left: 50%; bottom: 24px;
             transform: translateX(-50%);
-            background: rgba(74, 29, 29, 0.92);
-            color: #ffb0b0;
+            background: rgba(76, 42, 48, 0.92);
+            color: var(--danger-fg);
             padding: 12px 24px;
             border-radius: 8px;
-            border: 1px solid #6a2d2d;
+            border: 1px solid var(--danger-fg);
             font-size: 14px; font-weight: 500;
             display: none; pointer-events: none;
             backdrop-filter: blur(4px);
@@ -647,7 +626,7 @@ _HTML_TEMPLATE = r"""
         <div id="plot"></div>
         <div id="no-graph" class="no-graph">⚠ Такого графика не существует</div>
     </div>
-    <div id="description" class="description" style="display:none">
+    <div id="description" class="description">
         <span class="badge" id="desc-badge">Тип</span>
         <span id="desc-text"></span>
     </div>
@@ -655,7 +634,21 @@ _HTML_TEMPLATE = r"""
     <script>
         let mode = '3d';
  
-        // === Примеры для каждого режима ===
+        // === Nordic-цвета, доступные в JS ===
+        const C = {
+            bg:       '#2e3440',
+            bg2:      '#3b4252',
+            border:   '#4c566a',
+            text:     '#eceff4',
+            textMute: '#d8dee9',
+            textDim:  '#81a1c1',
+            accent:   '#88c0d0',
+            grid:     '#434c5e',
+            // Кликабельные подписи осей — белые
+            axisLabel: '#ffffff',
+        };
+ 
+        // === Примеры ===
         const EXAMPLES_2D = [
             { label: 'константа', expr: '3' },
             { label: 'линейная', expr: '2*x + 1' },
@@ -713,7 +706,6 @@ _HTML_TEMPLATE = r"""
                 document.getElementById('expr-label').textContent = 'Ваша функция y = f(x)';
                 document.getElementById('range1-label').textContent = 'Диапазон x';
                 document.getElementById('expr').placeholder = 'например: sin(x), x**2 - 4';
-                // дефолтное выражение для 2D
                 document.getElementById('expr').value = 'sin(x)';
             } else {
                 document.getElementById('expr-label').textContent = 'Ваша функция';
@@ -736,40 +728,50 @@ _HTML_TEMPLATE = r"""
             const [yLo, yHi] = ext(bounds.ymin, bounds.ymax);
             const [zLo, zHi] = ext(bounds.zmin, bounds.zmax);
  
+            // Тонкие оси (width 2 вместо 4), в одном спокойном цвете
+            const axisColor = C.textDim;
             const axisLines = [
                 { type: 'scatter3d', mode: 'lines',
                   x: [xLo, xHi], y: [0, 0], z: [0, 0],
-                  line: { color: '#ff6b6b', width: 4 },
+                  line: { color: axisColor, width: 2 },
                   hoverinfo: 'skip', showlegend: false },
                 { type: 'scatter3d', mode: 'lines',
                   x: [0, 0], y: [yLo, yHi], z: [0, 0],
-                  line: { color: '#51cf66', width: 4 },
+                  line: { color: axisColor, width: 2 },
                   hoverinfo: 'skip', showlegend: false },
                 { type: 'scatter3d', mode: 'lines',
                   x: [0, 0], y: [0, 0], z: [zLo, zHi],
-                  line: { color: '#4dabf7', width: 4 },
+                  line: { color: axisColor, width: 2 },
                   hoverinfo: 'skip', showlegend: false },
             ];
  
+            // БЕЛЫЕ КЛИКАБЕЛЬНЫЕ ПОДПИСИ x, y, z (через customdata, обрабатываются в plotly_click)
             const labels = {
                 type: 'scatter3d', mode: 'text',
                 x: [xHi, 0, 0], y: [0, yHi, 0], z: [0, 0, zHi],
                 text: ['<b>x</b>', '<b>y</b>', '<b>z</b>'],
-                textfont: { size: 18, color: '#e6e6e6' },
+                textfont: { size: 18, color: C.axisLabel, family: 'sans-serif' },
                 textposition: 'top center',
-                hoverinfo: 'skip', showlegend: false,
+                hoverinfo: 'text',
+                hovertext: ['ось x', 'ось y', 'ось z'],
+                customdata: ['axis-x', 'axis-y', 'axis-z'],
+                showlegend: false,
             };
  
-            const coneSize = Math.max(xHi - xLo, yHi - yLo, zHi - zLo) * 0.04;
+            // Стрелки на концах: размер 5% от сцены, но не меньше абсолютного минимума,
+            // чтобы оставались видимыми и при больших, и при маленьких диапазонах
+            const sceneSize = Math.max(xHi - xLo, yHi - yLo, zHi - zLo);
+            const coneSize = Math.max(sceneSize * 0.05, 0.5);
+            const arrowColor = C.axisLabel;  // белый, как подписи x/y/z
             const arrows = {
                 type: 'cone',
                 x: [xHi, 0, 0], y: [0, yHi, 0], z: [0, 0, zHi],
                 u: [1, 0, 0], v: [0, 1, 0], w: [0, 0, 1],
                 sizemode: 'absolute', sizeref: coneSize,
                 anchor: 'tip',
-                colorscale: [[0, '#888'], [1, '#888']],
+                colorscale: [[0, arrowColor], [1, arrowColor]],
                 showscale: false, hoverinfo: 'skip',
-                lighting: { ambient: 0.8 },
+                lighting: { ambient: 1.0, diffuse: 0.0 },  // плоская заливка
             };
  
             return [...axisLines, labels, arrows];
@@ -797,21 +799,30 @@ _HTML_TEMPLATE = r"""
         function drawPlot3D(surfaceTraces, bounds) {
             const axisTraces = buildArrowAxes3D(bounds);
             Plotly.newPlot('plot', [...surfaceTraces, ...axisTraces], {
-                paper_bgcolor: '#0f1419', plot_bgcolor: '#0f1419',
-                font: { color: '#e6e6e6' },
+                paper_bgcolor: C.bg, plot_bgcolor: C.bg,
+                font: { color: C.text, family: 'sans-serif' },
                 margin: { l: 0, r: 0, t: 0, b: 0 }, showlegend: false,
                 scene: {
                     xaxis: { visible: false, range: [bounds.xmin*1.2, bounds.xmax*1.2] },
                     yaxis: { visible: false, range: [bounds.ymin*1.2, bounds.ymax*1.2] },
                     zaxis: { visible: false, range: [bounds.zmin*1.2, bounds.zmax*1.2] },
-                    aspectmode: 'cube', bgcolor: '#0f1419',
+                    aspectmode: 'cube', bgcolor: C.bg,
                     camera: { eye: { x: 1.7, y: 1.7, z: 1.3 } }
                 }
             }, { responsive: true, displaylogo: false });
+ 
+            // Кликабельные подписи осей x, y, z — клик не делает ничего, только подтверждает что цель попала
+            const plotDiv = document.getElementById('plot');
+            plotDiv.removeAllListeners && plotDiv.removeAllListeners('plotly_click');
+            plotDiv.on('plotly_click', function(data) {
+                const pt = data.points && data.points[0];
+                if (pt && pt.customdata && /^axis-[xyz]$/.test(pt.customdata)) {
+                    // Намеренно ничего не делаем — но клик зарегистрирован и не передаётся дальше
+                }
+            });
         }
  
-        function drawPlot2D(traces, xRange, yRange) {
-            // Берём фактические границы данных, расширяем чтобы включить 0
+        function drawPlot2D(traces, xRange) {
             let xmin = xRange[0], xmax = xRange[1];
             let ymin = Infinity, ymax = -Infinity;
             for (const t of traces) {
@@ -820,7 +831,6 @@ _HTML_TEMPLATE = r"""
                 }
             }
             if (!isFinite(ymin)) { ymin = -1; ymax = 1; }
-            // включаем 0 в видимую область
             xmin = Math.min(xmin, 0); xmax = Math.max(xmax, 0);
             ymin = Math.min(ymin, 0); ymax = Math.max(ymax, 0);
             const xPad = (xmax - xmin) * 0.1 || 1;
@@ -828,60 +838,72 @@ _HTML_TEMPLATE = r"""
             const xLo = xmin - xPad, xHi = xmax + xPad;
             const yLo = ymin - yPad, yHi = ymax + yPad;
  
-            // Линии осей через начало координат
+            // Спокойные оси одним цветом
+            const axisColor = C.textDim;
             const axisX = {
                 type: 'scatter', mode: 'lines',
                 x: [xLo, xHi], y: [0, 0],
-                line: { color: '#ff6b6b', width: 2 },
+                line: { color: axisColor, width: 1.5 },
                 hoverinfo: 'skip', showlegend: false,
             };
             const axisY = {
                 type: 'scatter', mode: 'lines',
                 x: [0, 0], y: [yLo, yHi],
-                line: { color: '#51cf66', width: 2 },
+                line: { color: axisColor, width: 1.5 },
                 hoverinfo: 'skip', showlegend: false,
             };
  
-            // Стрелки на концах осей (через annotations)
+            // Стрелки на концах (видимые, белые)
             const arrows = [
-                {  // стрелка X (вправо)
-                    x: xHi, y: 0, ax: xHi - (xHi - xLo) * 0.04, ay: 0,
-                    xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
-                    showarrow: true, arrowhead: 3, arrowsize: 1.5, arrowwidth: 2,
-                    arrowcolor: '#ff6b6b', text: '',
-                },
-                {  // стрелка Y (вверх)
-                    x: 0, y: yHi, ax: 0, ay: yHi - (yHi - yLo) * 0.04,
-                    xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
-                    showarrow: true, arrowhead: 3, arrowsize: 1.5, arrowwidth: 2,
-                    arrowcolor: '#51cf66', text: '',
-                },
-                // подписи x, y
-                { x: xHi, y: 0, xref: 'x', yref: 'y', text: '<b>x</b>',
-                  showarrow: false, xanchor: 'left', yanchor: 'middle',
-                  font: { color: '#e6e6e6', size: 16 }, xshift: 8 },
-                { x: 0, y: yHi, xref: 'x', yref: 'y', text: '<b>y</b>',
-                  showarrow: false, xanchor: 'middle', yanchor: 'bottom',
-                  font: { color: '#e6e6e6', size: 16 }, yshift: 8 },
+                { x: xHi, y: 0, ax: xHi - (xHi - xLo) * 0.05, ay: 0,
+                  xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
+                  showarrow: true, arrowhead: 3, arrowsize: 1.6, arrowwidth: 2,
+                  arrowcolor: C.axisLabel, text: '' },
+                { x: 0, y: yHi, ax: 0, ay: yHi - (yHi - yLo) * 0.05,
+                  xref: 'x', yref: 'y', axref: 'x', ayref: 'y',
+                  showarrow: true, arrowhead: 3, arrowsize: 1.6, arrowwidth: 2,
+                  arrowcolor: C.axisLabel, text: '' },
             ];
  
-            Plotly.newPlot('plot', [...traces, axisX, axisY], {
-                paper_bgcolor: '#0f1419', plot_bgcolor: '#0f1419',
-                font: { color: '#e6e6e6' },
+            // Кликабельные белые подписи x, y — реализованы как scatter-точки с текстом
+            const labels = {
+                type: 'scatter', mode: 'text',
+                x: [xHi, 0], y: [0, yHi],
+                text: ['<b>x</b>', '<b>y</b>'],
+                textfont: { size: 17, color: C.axisLabel, family: 'sans-serif' },
+                textposition: ['middle right', 'top center'],
+                hoverinfo: 'text',
+                hovertext: ['ось x', 'ось y'],
+                customdata: ['axis-x', 'axis-y'],
+                showlegend: false,
+            };
+ 
+            Plotly.newPlot('plot', [...traces, axisX, axisY, labels], {
+                paper_bgcolor: C.bg, plot_bgcolor: C.bg,
+                font: { color: C.text, family: 'sans-serif' },
                 margin: { l: 40, r: 40, t: 20, b: 40 },
                 showlegend: false,
                 xaxis: {
-                    range: [xLo, xHi], gridcolor: '#2a3142',
+                    range: [xLo, xHi], gridcolor: C.grid,
                     zeroline: false, showline: false,
-                    color: '#8b95a7',
+                    color: C.textDim,
                 },
                 yaxis: {
-                    range: [yLo, yHi], gridcolor: '#2a3142',
+                    range: [yLo, yHi], gridcolor: C.grid,
                     zeroline: false, showline: false,
-                    color: '#8b95a7',
+                    color: C.textDim,
                 },
                 annotations: arrows,
             }, { responsive: true, displaylogo: false });
+ 
+            // Клики по подписям x, y — намеренно без действия
+            const plotDiv = document.getElementById('plot');
+            plotDiv.on('plotly_click', function(data) {
+                const pt = data.points && data.points[0];
+                if (pt && pt.customdata && /^axis-[xy]$/.test(pt.customdata)) {
+                    // Не делаем ничего
+                }
+            });
         }
  
         function showError(msg) {
@@ -969,7 +991,6 @@ _HTML_TEMPLATE = r"""
             if (e.key === 'Enter') render();
         });
  
-        // Старт
         renderExamples();
         render();
     </script>
@@ -990,21 +1011,10 @@ def _find_free_port(start: int = 5000) -> int:
  
 def plot(port: Optional[int] = None, open_browser: bool = True):
     """
-    Запускает локальный сервер с веб-интерфейсом для построения графиков.
+    Запускает локальный сервер с веб-интерфейсом (тема Nordic).
  
-    На странице есть переключатель 2D / 3D:
-      • 2D: y = f(x)         — например 'sin(x)', 'x**2 - 4'
-      • 3D: z = f(x, y)      — например 'x**2 + y**2'
-        или (x, y, z) = f(u, v) через ';' — например
-        'cos(u)*sin(v); sin(u)*sin(v); cos(v)'  (сфера)
- 
-    Снизу под графиком автоматически выводится тип функции (линейная,
-    парабола, параболоид, седло, сфера, тор и т. д.).
- 
-    Доступные функции: sin, cos, tan, asin, acos, atan, atan2,
-    sinh, cosh, tanh, exp, log, log2, log10, sqrt, cbrt, abs, sign,
-    floor, ceil, round, min, max, pow.
-    Константы: pi, e, tau.
+    Режимы 2D и 3D на одной странице, поддерживается ввод функции
+    в браузере, автоматическое определение типа функции.
     """
     app = Flask(__name__)
     import logging
