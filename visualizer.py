@@ -758,48 +758,44 @@ _HTML_TEMPLATE = r"""
                 showlegend: false,
             };
  
-            // Стрелки на концах осей: вместо проблемных cone-трейсов рисуем
-            // "галочки" из линий — два коротких отрезка от вершины оси, идущих
-            // назад под углом. Это гарантированно видимо при любой прозрачности
-            // поверхности, не требует освещения, всегда корректного цвета.
+            // Стрелки на концах осей: каждый наконечник — 4 линии,
+            // расходящиеся от вершины оси в обе перпендикулярные стороны.
+            // Это даёт объёмную "звёздочку", которая читается с любого угла камеры,
+            // в отличие от плоской галочки (которая исчезала при виде сверху для X/Y осей).
             const sceneSize = Math.max(xHi - xLo, yHi - yLo, zHi - zLo);
-            const arrowLen = sceneSize * 0.04;   // длина "крылышек" стрелки
-            const arrowWide = sceneSize * 0.02;  // ширина (отступ в стороны)
-            const arrowColor = C.axisLabel;      // белый
-            const arrowWidth = 4;
+            const aLen = sceneSize * 0.05;   // длина крыла наконечника
+            const aWide = sceneSize * 0.025; // отступ крыла в сторону
+            const arrowColor = C.axisLabel;  // белый
+            const arrowWidth = 5;
  
-            // Стрелка X — крылышки лежат в плоскости XY, расходятся вдоль Y
+            // Хелпер: одна линия для крыла стрелки
+            const wing = (x1, y1, z1, x2, y2, z2) => ({
+                type: 'scatter3d', mode: 'lines',
+                x: [x1, x2], y: [y1, y2], z: [z1, z2],
+                line: { color: arrowColor, width: arrowWidth },
+                hoverinfo: 'skip', showlegend: false,
+            });
+ 
+            // Стрелка X (наконечник в точке xHi, 0, 0) — крылья в плоскостях XY и XZ
             const arrowX = [
-                { type: 'scatter3d', mode: 'lines',
-                  x: [xHi, xHi - arrowLen], y: [0,  arrowWide], z: [0, 0],
-                  line: { color: arrowColor, width: arrowWidth },
-                  hoverinfo: 'skip', showlegend: false },
-                { type: 'scatter3d', mode: 'lines',
-                  x: [xHi, xHi - arrowLen], y: [0, -arrowWide], z: [0, 0],
-                  line: { color: arrowColor, width: arrowWidth },
-                  hoverinfo: 'skip', showlegend: false },
+                wing(xHi, 0, 0, xHi - aLen,  aWide, 0),  // +Y
+                wing(xHi, 0, 0, xHi - aLen, -aWide, 0),  // -Y
+                wing(xHi, 0, 0, xHi - aLen, 0,  aWide),  // +Z
+                wing(xHi, 0, 0, xHi - aLen, 0, -aWide),  // -Z
             ];
-            // Стрелка Y — крылышки лежат в плоскости XY, расходятся вдоль X
+            // Стрелка Y (наконечник в точке 0, yHi, 0)
             const arrowY = [
-                { type: 'scatter3d', mode: 'lines',
-                  x: [ arrowWide, 0], y: [yHi - arrowLen, yHi], z: [0, 0],
-                  line: { color: arrowColor, width: arrowWidth },
-                  hoverinfo: 'skip', showlegend: false },
-                { type: 'scatter3d', mode: 'lines',
-                  x: [-arrowWide, 0], y: [yHi - arrowLen, yHi], z: [0, 0],
-                  line: { color: arrowColor, width: arrowWidth },
-                  hoverinfo: 'skip', showlegend: false },
+                wing(0, yHi, 0,  aWide, yHi - aLen, 0),
+                wing(0, yHi, 0, -aWide, yHi - aLen, 0),
+                wing(0, yHi, 0, 0, yHi - aLen,  aWide),
+                wing(0, yHi, 0, 0, yHi - aLen, -aWide),
             ];
-            // Стрелка Z — крылышки лежат в плоскости XZ, расходятся вдоль X
+            // Стрелка Z (наконечник в точке 0, 0, zHi)
             const arrowZ = [
-                { type: 'scatter3d', mode: 'lines',
-                  x: [ arrowWide, 0], y: [0, 0], z: [zHi - arrowLen, zHi],
-                  line: { color: arrowColor, width: arrowWidth },
-                  hoverinfo: 'skip', showlegend: false },
-                { type: 'scatter3d', mode: 'lines',
-                  x: [-arrowWide, 0], y: [0, 0], z: [zHi - arrowLen, zHi],
-                  line: { color: arrowColor, width: arrowWidth },
-                  hoverinfo: 'skip', showlegend: false },
+                wing(0, 0, zHi,  aWide, 0, zHi - aLen),
+                wing(0, 0, zHi, -aWide, 0, zHi - aLen),
+                wing(0, 0, zHi, 0,  aWide, zHi - aLen),
+                wing(0, 0, zHi, 0, -aWide, zHi - aLen),
             ];
  
             return [...axisLines, ...arrowX, ...arrowY, ...arrowZ, labels];
