@@ -728,20 +728,20 @@ _HTML_TEMPLATE = r"""
             const [yLo, yHi] = ext(bounds.ymin, bounds.ymax);
             const [zLo, zHi] = ext(bounds.zmin, bounds.zmax);
  
-            // Тонкие оси (width 2 вместо 4), в одном спокойном цвете
-            const axisColor = C.textDim;
+            // Сами оси — белые, толще: согласованы со стрелками и подписями
+            const axisColor = C.axisLabel;
             const axisLines = [
                 { type: 'scatter3d', mode: 'lines',
                   x: [xLo, xHi], y: [0, 0], z: [0, 0],
-                  line: { color: axisColor, width: 2 },
+                  line: { color: axisColor, width: 4 },
                   hoverinfo: 'skip', showlegend: false },
                 { type: 'scatter3d', mode: 'lines',
                   x: [0, 0], y: [yLo, yHi], z: [0, 0],
-                  line: { color: axisColor, width: 2 },
+                  line: { color: axisColor, width: 4 },
                   hoverinfo: 'skip', showlegend: false },
                 { type: 'scatter3d', mode: 'lines',
                   x: [0, 0], y: [0, 0], z: [zLo, zHi],
-                  line: { color: axisColor, width: 2 },
+                  line: { color: axisColor, width: 4 },
                   hoverinfo: 'skip', showlegend: false },
             ];
  
@@ -758,23 +758,51 @@ _HTML_TEMPLATE = r"""
                 showlegend: false,
             };
  
-            // Стрелки на концах: размер 5% от сцены, но не меньше абсолютного минимума,
-            // чтобы оставались видимыми и при больших, и при маленьких диапазонах
+            // Стрелки на концах осей: вместо проблемных cone-трейсов рисуем
+            // "галочки" из линий — два коротких отрезка от вершины оси, идущих
+            // назад под углом. Это гарантированно видимо при любой прозрачности
+            // поверхности, не требует освещения, всегда корректного цвета.
             const sceneSize = Math.max(xHi - xLo, yHi - yLo, zHi - zLo);
-            const coneSize = Math.max(sceneSize * 0.05, 0.5);
-            const arrowColor = C.axisLabel;  // белый, как подписи x/y/z
-            const arrows = {
-                type: 'cone',
-                x: [xHi, 0, 0], y: [0, yHi, 0], z: [0, 0, zHi],
-                u: [1, 0, 0], v: [0, 1, 0], w: [0, 0, 1],
-                sizemode: 'absolute', sizeref: coneSize,
-                anchor: 'tip',
-                colorscale: [[0, arrowColor], [1, arrowColor]],
-                showscale: false, hoverinfo: 'skip',
-                lighting: { ambient: 1.0, diffuse: 0.0 },  // плоская заливка
-            };
+            const arrowLen = sceneSize * 0.04;   // длина "крылышек" стрелки
+            const arrowWide = sceneSize * 0.02;  // ширина (отступ в стороны)
+            const arrowColor = C.axisLabel;      // белый
+            const arrowWidth = 4;
  
-            return [...axisLines, labels, arrows];
+            // Стрелка X — крылышки лежат в плоскости XY, расходятся вдоль Y
+            const arrowX = [
+                { type: 'scatter3d', mode: 'lines',
+                  x: [xHi, xHi - arrowLen], y: [0,  arrowWide], z: [0, 0],
+                  line: { color: arrowColor, width: arrowWidth },
+                  hoverinfo: 'skip', showlegend: false },
+                { type: 'scatter3d', mode: 'lines',
+                  x: [xHi, xHi - arrowLen], y: [0, -arrowWide], z: [0, 0],
+                  line: { color: arrowColor, width: arrowWidth },
+                  hoverinfo: 'skip', showlegend: false },
+            ];
+            // Стрелка Y — крылышки лежат в плоскости XY, расходятся вдоль X
+            const arrowY = [
+                { type: 'scatter3d', mode: 'lines',
+                  x: [ arrowWide, 0], y: [yHi - arrowLen, yHi], z: [0, 0],
+                  line: { color: arrowColor, width: arrowWidth },
+                  hoverinfo: 'skip', showlegend: false },
+                { type: 'scatter3d', mode: 'lines',
+                  x: [-arrowWide, 0], y: [yHi - arrowLen, yHi], z: [0, 0],
+                  line: { color: arrowColor, width: arrowWidth },
+                  hoverinfo: 'skip', showlegend: false },
+            ];
+            // Стрелка Z — крылышки лежат в плоскости XZ, расходятся вдоль X
+            const arrowZ = [
+                { type: 'scatter3d', mode: 'lines',
+                  x: [ arrowWide, 0], y: [0, 0], z: [zHi - arrowLen, zHi],
+                  line: { color: arrowColor, width: arrowWidth },
+                  hoverinfo: 'skip', showlegend: false },
+                { type: 'scatter3d', mode: 'lines',
+                  x: [-arrowWide, 0], y: [0, 0], z: [zHi - arrowLen, zHi],
+                  line: { color: arrowColor, width: arrowWidth },
+                  hoverinfo: 'skip', showlegend: false },
+            ];
+ 
+            return [...axisLines, ...arrowX, ...arrowY, ...arrowZ, labels];
         }
  
         function computeBounds3D(traces) {
