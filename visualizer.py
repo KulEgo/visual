@@ -745,60 +745,160 @@ _HTML_TEMPLATE = r"""
                   hoverinfo: 'skip', showlegend: false },
             ];
  
-            // БЕЛЫЕ КЛИКАБЕЛЬНЫЕ ПОДПИСИ x, y, z (через customdata, обрабатываются в plotly_click)
+            // БЕЛЫЕ КЛИКАБЕЛЬНЫЕ ПОДПИСИ +x/-x, +y/-y, +z/-z на обоих концах осей
             const labels = {
                 type: 'scatter3d', mode: 'text',
-                x: [xHi, 0, 0], y: [0, yHi, 0], z: [0, 0, zHi],
-                text: ['<b>x</b>', '<b>y</b>', '<b>z</b>'],
-                textfont: { size: 18, color: C.axisLabel, family: 'sans-serif' },
+                x: [xHi, xLo, 0,   0,   0,   0  ],
+                y: [0,   0,   yHi, yLo, 0,   0  ],
+                z: [0,   0,   0,   0,   zHi, zLo],
+                text: ['<b>+x</b>', '<b>−x</b>', '<b>+y</b>', '<b>−y</b>', '<b>+z</b>', '<b>−z</b>'],
+                textfont: { size: 17, color: C.axisLabel, family: 'sans-serif' },
                 textposition: 'top center',
                 hoverinfo: 'text',
-                hovertext: ['ось x', 'ось y', 'ось z'],
-                customdata: ['axis-x', 'axis-y', 'axis-z'],
+                hovertext: ['ось +x', 'ось −x', 'ось +y', 'ось −y', 'ось +z', 'ось −z'],
+                customdata: ['axis-x', 'axis-x', 'axis-y', 'axis-y', 'axis-z', 'axis-z'],
                 showlegend: false,
             };
  
-            // Стрелки на концах осей: каждый наконечник — 4 линии,
-            // расходящиеся от вершины оси в обе перпендикулярные стороны.
-            // Это даёт объёмную "звёздочку", которая читается с любого угла камеры,
-            // в отличие от плоской галочки (которая исчезала при виде сверху для X/Y осей).
-            const sceneSize = Math.max(xHi - xLo, yHi - yLo, zHi - zLo);
-            const aLen = sceneSize * 0.05;   // длина крыла наконечника
-            const aWide = sceneSize * 0.025; // отступ крыла в сторону
-            const arrowColor = C.axisLabel;  // белый
-            const arrowWidth = 5;
+            const xAxisLen = xHi - xLo;
+            const yAxisLen = yHi - yLo;
+            const zAxisLen = zHi - zLo;
  
-            // Хелпер: одна линия для крыла стрелки
-            const wing = (x1, y1, z1, x2, y2, z2) => ({
-                type: 'scatter3d', mode: 'lines',
-                x: [x1, x2], y: [y1, y2], z: [z1, z2],
-                line: { color: arrowColor, width: arrowWidth },
-                hoverinfo: 'skip', showlegend: false,
-            });
+            const coneSegments = 24; // можно 16, но 24 даст более гладкий конус
+            const arrowColor = C.axisLabel;
  
-            // Стрелка X (наконечник в точке xHi, 0, 0) — крылья в плоскостях XY и XZ
-            const arrowX = [
-                wing(xHi, 0, 0, xHi - aLen,  aWide, 0),  // +Y
-                wing(xHi, 0, 0, xHi - aLen, -aWide, 0),  // -Y
-                wing(xHi, 0, 0, xHi - aLen, 0,  aWide),  // +Z
-                wing(xHi, 0, 0, xHi - aLen, 0, -aWide),  // -Z
-            ];
-            // Стрелка Y (наконечник в точке 0, yHi, 0)
-            const arrowY = [
-                wing(0, yHi, 0,  aWide, yHi - aLen, 0),
-                wing(0, yHi, 0, -aWide, yHi - aLen, 0),
-                wing(0, yHi, 0, 0, yHi - aLen,  aWide),
-                wing(0, yHi, 0, 0, yHi - aLen, -aWide),
-            ];
-            // Стрелка Z (наконечник в точке 0, 0, zHi)
-            const arrowZ = [
-                wing(0, 0, zHi,  aWide, 0, zHi - aLen),
-                wing(0, 0, zHi, -aWide, 0, zHi - aLen),
-                wing(0, 0, zHi, 0,  aWide, zHi - aLen),
-                wing(0, 0, zHi, 0, -aWide, zHi - aLen),
+            // Если у тебя scene.aspectratio не задан вручную,
+            // можно оставить единицы.
+            // Если задан — лучше подставить реальные значения.
+            const aspect = {
+                x: 1,
+                y: 1,
+                z: 1,
+            };
+ 
+            // "Сколько data-units нужно, чтобы на экране это выглядело одинаково"
+            const scale = {
+                x: xAxisLen / aspect.x,
+                y: yAxisLen / aspect.y,
+                z: zAxisLen / aspect.z,
+            };
+ 
+            function buildCone(axis, direction, tipPos) {
+                // ВИЗУАЛЬНЫЕ размеры стрелки:
+                // они одинаковые для всех осей
+                const coneLenVisual = 0.06;
+                const coneRadVisual = 0.012;
+ 
+                // Переводим визуальные размеры в data-units с учётом масштаба осей
+                const coneLen =
+                    axis === 'x' ? coneLenVisual * scale.x :
+                    axis === 'y' ? coneLenVisual * scale.y :
+                                   coneLenVisual * scale.z;
+ 
+                const radX = coneRadVisual * scale.x;
+                const radY = coneRadVisual * scale.y;
+                const radZ = coneRadVisual * scale.z;
+ 
+                // 0-я вершина — кончик
+                const vx = [tipPos[0]];
+                const vy = [tipPos[1]];
+                const vz = [tipPos[2]];
+ 
+                // Центр основания
+                const base = [tipPos[0], tipPos[1], tipPos[2]];
+                if (axis === 'x') base[0] -= direction * coneLen;
+                if (axis === 'y') base[1] -= direction * coneLen;
+                if (axis === 'z') base[2] -= direction * coneLen;
+ 
+                // Точки окружности основания
+                for (let n = 0; n < coneSegments; n++) {
+                    const a = (2 * Math.PI * n) / coneSegments;
+                    const c = Math.cos(a);
+                    const s = Math.sin(a);
+ 
+                    if (axis === 'x') {
+                        // Основание лежит в плоскости YZ
+                        vx.push(base[0]);
+                        vy.push(base[1] + c * radY);
+                        vz.push(base[2] + s * radZ);
+                    } else if (axis === 'y') {
+                        // Основание лежит в плоскости XZ
+                        vx.push(base[0] + c * radX);
+                        vy.push(base[1]);
+                        vz.push(base[2] + s * radZ);
+                    } else {
+                        // axis === 'z'
+                        // Основание лежит в плоскости XY
+                        vx.push(base[0] + c * radX);
+                        vy.push(base[1] + s * radY);
+                        vz.push(base[2]);
+                    }
+                }
+ 
+                // Добавим центр основания, чтобы "закрыть" конус
+                const baseCenterIndex = vx.length;
+                vx.push(base[0]);
+                vy.push(base[1]);
+                vz.push(base[2]);
+ 
+                const i = [];
+                const j = [];
+                const k = [];
+ 
+                // Боковые грани
+                for (let n = 0; n < coneSegments; n++) {
+                    const p1 = 1 + n;
+                    const p2 = 1 + ((n + 1) % coneSegments);
+ 
+                    i.push(0);
+                    j.push(p1);
+                    k.push(p2);
+                }
+ 
+                // Основание (крышка)
+                for (let n = 0; n < coneSegments; n++) {
+                    const p1 = 1 + n;
+                    const p2 = 1 + ((n + 1) % coneSegments);
+ 
+                    i.push(baseCenterIndex);
+                    j.push(p2);
+                    k.push(p1);
+                }
+ 
+                return {
+                    type: 'mesh3d',
+                    x: vx,
+                    y: vy,
+                    z: vz,
+                    i: i,
+                    j: j,
+                    k: k,
+                    color: arrowColor,
+                    flatshading: false,
+                    lighting: {
+                        ambient: 0.85,
+                        diffuse: 0.6,
+                        specular: 0.15,
+                        roughness: 0.8,
+                        fresnel: 0.05,
+                    },
+                    hoverinfo: 'skip',
+                    showlegend: false,
+                };
+            }
+ 
+            const cones = [
+                buildCone('x', +1, [xHi, 0, 0]),
+                buildCone('x', -1, [xLo, 0, 0]),
+ 
+                buildCone('y', +1, [0, yHi, 0]),
+                buildCone('y', -1, [0, yLo, 0]),
+ 
+                buildCone('z', +1, [0, 0, zHi]),
+                buildCone('z', -1, [0, 0, zLo]),
             ];
  
-            return [...axisLines, ...arrowX, ...arrowY, ...arrowZ, labels];
+            return [...axisLines, ...cones, labels];
         }
  
         function computeBounds3D(traces) {
